@@ -1,0 +1,9 @@
+# 仮想環境フォルダ
+venv/
+
+# Pythonバイトコード
+__pycache__/
+
+# ログやキャッシュ
+*.log
+.DS_Store
