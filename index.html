@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI会話ブランチ可視化ツール</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+    
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f7f6; }
+        h1 { color: #2c3e50; text-align: center; }
+        .controls { 
+            display: flex; 
+            gap: 10px; 
+            justify-content: center; 
+            margin-bottom: 20px; 
+            padding: 15px; 
+            background-color: #e9ecef; 
+            border-radius: 8px; 
+        }
+        .controls button { 
+            padding: 10px 18px; 
+            font-size: 1rem; 
+            border: none; 
+            border-radius: 5px; 
+            cursor: pointer; 
+            background-color: #007bff; 
+            color: white; 
+            transition: background-color 0.2s;
+        }
+        .controls button:hover { background-color: #0056b3; }
+        #mermaid-container {
+            margin: 30px auto;
+            border: 1px solid #ccc;
+            background-color: #fff;
+            padding: 20px;
+            overflow-x: auto;
+            min-height: 400px; /* 描画エリア確保 */
+        }
+        #status-display {
+            text-align: center;
+            padding: 10px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>AI会話ブランチ ナビゲーター</h1>
+
+    <div id="status-display">接続中...</div>
+    <div id="current-branch-display" style="text-align: center; font-size: 1.2rem; margin-bottom: 15px; font-weight: bold; color: #2980b9;">
+        現在のブランチ: main
+    </div>
+
+    <div class="controls">
+        <input type="text" id="talkInput" placeholder="発言内容を入力 (talk)">
+        <button onclick="sendUserAction('talk')">発言送信</button>
+        <button onclick="sendUserAction('branch')">話題分岐 (branch)</button>
+        <button onclick="sendUserAction('merge')">元に戻る (merge)</button>
+        <button onclick="resetGraph()">リセット (手動)</button>
+    </div>
+
+    <div id="mermaid-container">
+        <div class="mermaid" id="gitGraphDisplay"></div>
+    </div>
+
+    <script>
+        // --- 1. WebSocket 接続設定 ---
+        
+        // 🚨 サーバーがポート8002で起動していることを前提とする
+        const SERVER_URL = "ws://127.0.0.1:8002/ws";
+        const ws = new WebSocket(SERVER_URL);
+        const statusDisplay = document.getElementById('status-display');
+        const talkInput = document.getElementById('talkInput');
+        const currentBranchDisplay = document.getElementById('current-branch-display');
+        
+        // --- 2. Mermaid & グラフ状態管理 ---
+        
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'default',
+            git: {
+                mainBranchName: 'main',
+                showBranches: true,
+                showCommitLabel: true
+            }
+        });
+
+        let mermaidCode = 'gitGraph\n\tcommit id: "会議開始"';
+        let currentBranchName = 'main';
+        let branchStack = ['main'];
+        let branchCounter = 0;
+
+        const displayElement = document.getElementById('gitGraphDisplay');
+
+        /**
+        * 現在のブランチ名をUIに表示する
+        */
+        function updateBranchDisplay() {
+            currentBranchDisplay.textContent = `現在のブランチ: ${currentBranchName}`;
+        }
+
+        /**
+         * グラフをMermaid記法に基づいて再描画する
+         */
+        function updateGraph() {
+            displayElement.textContent = mermaidCode;
+
+            mermaid.render('mermaid-chart', mermaidCode)
+                .then(({ svg }) => {
+                    displayElement.innerHTML = svg;
+                })
+                .catch(err => {
+                    displayElement.innerHTML = `<p style="color:red;">グラフ描画エラー: ${err.message}</p>`;
+                });
+        }
+        
+        // --- 3. WebSocket イベントハンドラー ---
+
+        ws.onopen = function(event) {
+            statusDisplay.textContent = "✅ 接続完了";
+            statusDisplay.style.color = "green";
+            console.log("WebSocket接続が確立されました。");
+            ws.send("フロントエンドから接続しました。");
+            updateGraph(); // 初期グラフ描画
+        };
+
+        ws.onmessage = function(event) {
+            console.log("サーバーからAIコマンドを受信:", event.data);
+            
+            try {
+                const aiCommand = JSON.parse(event.data);
+                
+                // 受信したAIコマンドを処理し、グラフを更新
+                handleAICommand(aiCommand);
+                
+            } catch (e) {
+                console.error("JSONパースエラー:", e);
+            }
+        };
+
+        ws.onclose = function(event) {
+            statusDisplay.textContent = "❌ 接続切断";
+            statusDisplay.style.color = "red";
+            console.log("WebSocket接続が閉じられました。");
+        };
+
+        ws.onerror = function(event) {
+            statusDisplay.textContent = "⚠️ 接続エラー";
+            statusDisplay.style.color = "orange";
+            console.error("WebSocketエラー:", event);
+        };
+
+        // --- 4. グラフ更新ロジック (AIコマンド処理) ---
+
+        /**
+         * AIから受け取ったコマンドに基づいてグラフの状態を更新する
+         * @param {object} command - {"action": "talk"|"branch"|"merge", ...}
+         */
+        /**
+         * AIから受け取ったコマンドに基づいてグラフの状態を更新する
+         * @param {object} command - {"action": "talk"|"branch"|"merge", ...}
+         */
+        function handleAICommand(command) {
+            const { action, topic, text } = command;
+            
+            // 💡 修正ポイント: 
+            // 現在時刻(ミリ秒)を取得し、コミットIDを強制的にユニークにする
+            const uniqueId = Date.now(); 
+
+            switch (action) {
+                case 'talk':
+                    // 現在のブランチを明示
+                    mermaidCode += `\n\tcheckout ${currentBranchName}`; 
+                    // 💡 IDに uniqueId を付与 (表示はされませんが、内部IDとして機能します)
+                    mermaidCode += `\n\tcommit id: "${text} - ${uniqueId}" tag: "${text}"`;
+                    break;
+
+                case 'branch':
+                    // 深さ制限（これは stack.length で判定してOK）
+                    if (branchStack.length >= 5) {
+                        alert("ブランチが深すぎます。");
+                        return;
+                    }
+
+                    // 💡 修正: カウンターを増やして、ユニークなブランチ名を作る
+                    branchCounter++; 
+                    const newBranchName = 'sub-' + branchCounter; 
+                    
+                    // 以下は変更なし
+                    mermaidCode += `\n\tbranch ${newBranchName}`;
+                    mermaidCode += `\n\tcheckout ${newBranchName}`;
+                    
+                    // コミットIDのユニーク化もお忘れなく
+                    mermaidCode += `\n\tcommit id: "${topic || '分岐'} - ${uniqueId}" tag: "${topic || '分岐'}"`;
+                    
+                    branchStack.push(newBranchName);
+                    currentBranchName = newBranchName;
+                    break;
+
+                case 'merge':
+                    if (branchStack.length <= 1) {
+                        console.log("メインブランチのためマージはスキップ。");
+                        return;
+                    } 
+                    
+                    const branchToMerge = branchStack.pop(); // マージ元
+                    const targetBranch = branchStack[branchStack.length - 1]; // マージ先（親）
+                    
+                    // 1. 親ブランチに戻る
+                    mermaidCode += `\n\tcheckout ${targetBranch}`;
+                    
+                    // 2. マージ実行 (💡ここもユニークID化)
+                    mermaidCode += `\n\tmerge ${branchToMerge} id: "merge-${uniqueId}" tag: "合流"`;
+                    
+                    // 3. 操作ブランチを親に戻す
+                    currentBranchName = targetBranch;
+                    
+                    // 4. 念のためチェックアウトを明記（解決策1の内容）
+                    mermaidCode += `\n\tcheckout ${currentBranchName}`;
+                    break;
+                
+                case 'end':
+                    break;
+            }
+
+            updateGraph();
+        }
+
+        // --- 5. ユーザー操作 (WebSocket送信) ---
+        
+        /**
+         * ユーザーアクションをトリガーとしてサーバーに送信
+         */
+        // index.html の sendUserAction 関数
+
+function sendUserAction(actionType) {
+    if (ws.readyState !== WebSocket.OPEN) {
+        alert("サーバーに接続されていません。");
+        return;
+    }
+
+    let message = talkInput.value.trim() || "";
+    
+    let payload = {};
+
+    if (actionType === 'talk') {
+        if (!message) {
+            alert("発言内容を入力してください。");
+            return;
+        }
+        payload = { action: 'talk', content: message };
+    } else if (actionType === 'branch') {
+        // 💡 修正点：branchアクションであることをサーバーに明示
+        payload = { action: 'branch', content: message || '新しい話題' };
+    } else if (actionType === 'merge') {
+        // 💡 修正点：mergeアクションであることをサーバーに明示
+        payload = { action: 'merge' };
+    } else {
+        return;
+    }
+
+    // サーバーにはJSON文字列として送信する (JSON.stringifyを使用)
+    ws.send(JSON.stringify(payload));
+    
+    // 入力欄をクリア
+    if (actionType === 'talk' || actionType === 'branch') {
+        talkInput.value = '';
+    }
+}
+
+        /**
+         * グラフと状態をリセットする
+         */
+        function resetGraph() {
+            if (confirm("グラフの状態をリセットしますか？")) {
+                mermaidCode = 'gitGraph\n\tcommit id: "会議開始"';
+                currentBranchName = 'main';
+                branchStack = ['main'];
+                updateGraph();
+                statusDisplay.textContent = "✅ 接続完了 (グラフリセット)";
+                statusDisplay.style.color = "green";
+            }
+        }
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+# FastAPIフレームワークと基本的なサーバー
+fastapi
+uvicorn
+
+# CORSミドルウェアに必要な依存関係（fastapiでインストールされることが多いが念のため）
+starlette
+
+# WebSocketプロトコルを処理するために、uvicornの標準パッケージ群を要求
+uvicorn[standard]
